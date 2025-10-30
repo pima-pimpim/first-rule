@@ -3,6 +3,9 @@ import json
 import pandas as pd
 import streamlit as st
 
+# ตั้งค่าอัปโหลดสูงสุด (MB) ในไฟล์เดียว
+st.set_option("server.maxUploadSize", 1024)  # ตัวอย่าง: 1024 = 1 GB
+
 st.set_page_config(page_title="Projects JSON → Dropdown & Tables", layout="wide")
 st.title("📁 เลือก Project ID แล้วแสดงข้อมูลเป็นตาราง")
 
