@@ -1,4 +1,4 @@
-# first_rule.py
+# app.py
 import json
 import pandas as pd
 import streamlit as st
@@ -37,38 +37,71 @@ if df.empty:
     st.warning("ไม่พบข้อมูลที่แปลงเป็นตารางได้")
     st.stop()
 
-# -------- แยกชนิดคอลัมน์ --------
-num_cols = df.select_dtypes(include=["number", "float", "int"]).columns.tolist()
-dt_cols  = df.select_dtypes(include=["datetime64[ns]","datetimetz"]).columns.tolist()
-# พยายาม parse datetime แบบเบา ๆ
+# -------- helper: ทำค่าให้นับ unique ได้เสมอ --------
+def _serialize_cell(x):
+    # ทำให้ list/dict/set กลายเป็น string ที่เทียบเท่ากันได้
+    if isinstance(x, (list, dict, set)):
+        try:
+            return json.dumps(x, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            return str(x)
+    return x
+
+def safe_nunique(s: pd.Series) -> int:
+    try:
+        return s.nunique(dropna=True)
+    except TypeError:
+        return s.map(_serialize_cell).nunique(dropna=True)
+
+def safe_unique_options(s: pd.Series):
+    # คืนค่ารายการ option เป็น string ที่อ่านง่าย
+    try:
+        uniq = s.dropna().unique().tolist()
+    except TypeError:
+        uniq = s.dropna().map(_serialize_cell).unique().tolist()
+    # แปลงเป็นสตริงสำหรับแสดงผลเสมอ (ไม่ทำให้ข้อมูลต้นทางเปลี่ยน)
+    return sorted([str(u) for u in uniq])
+
+# -------- แยกชนิดคอลัมน์ + พยายาม parse วันที่ --------
 for c in df.columns:
     if df[c].dtype == "object":
+        # parse datetime แบบไม่บังคับ
         try:
             df[c] = pd.to_datetime(df[c])
         except Exception:
             pass
-dt_cols  = list(set(dt_cols) | set(df.select_dtypes(include=["datetime64[ns]","datetimetz"]).columns))
+
+num_cols = df.select_dtypes(include=["number", "float", "int"]).columns.tolist()
+dt_cols  = df.select_dtypes(include=["datetime64[ns]","datetimetz"]).columns.tolist()
 cat_cols = [c for c in df.columns if c not in num_cols + dt_cols]
 
 st.subheader("🎚️ ตัวกรองด้วยดรอปดาวน์ (เลือกได้หลายอย่าง)")
 with st.expander("ตั้งค่าตัวกรอง"):
-    # เลือกคอลัมน์ที่จะทำเป็นดรอปดาวน์ (ค่าเริ่มต้น: คอลัมน์เชิงหมวดหมู่ทั้งหมดที่มี unique ≤ 100)
-    default_filter_cols = [c for c in cat_cols if df[c].nunique(dropna=True) <= 100][:6]
+    # ใช้ safe_nunique แทน .nunique ตรง ๆ
+    default_filter_cols = []
+    for c in cat_cols:
+        try:
+            if safe_nunique(df[c]) <= 100:
+                default_filter_cols.append(c)
+        except Exception:
+            # ถ้ามีปัญหาใด ๆ ข้ามคอลัมน์นั้นไป
+            continue
+    default_filter_cols = default_filter_cols[:6]
+
     filter_cols = st.multiselect(
         "เลือกคอลัมน์สำหรับทำดรอปดาวน์",
         cat_cols,
         default=default_filter_cols,
-        help="ควรเลือกคอลัมน์ที่มีจำนวนค่าจำเพาะไม่เยอะนัก"
+        help="ควรเลือกคอลัมน์ที่มีจำนวนค่าจำเพาะไม่เยอะนัก (≤ ~100)"
     )
 
     # สร้างดรอปดาวน์ตามคอลัมน์ที่เลือก
     filters = {}
     flt_cols_layout = st.columns(min(3, max(1, len(filter_cols))))
     for i, c in enumerate(filter_cols):
-        uniq = df[c].dropna().astype(str).unique().tolist()
-        uniq = sorted(uniq)
+        options = ["(ทั้งหมด)"] + safe_unique_options(df[c])
         with flt_cols_layout[i % len(flt_cols_layout)]:
-            sel = st.multiselect(f"{c}", options=["(ทั้งหมด)"] + uniq, default="(ทั้งหมด)")
+            sel = st.multiselect(f"{c}", options=options, default="(ทั้งหมด)")
         filters[c] = sel
 
     # กรองช่วงวันที่ (ถ้ามีคอลัมน์วันที่)
@@ -92,10 +125,10 @@ with st.expander("ตั้งค่าตัวกรอง"):
 # -------- นำตัวกรองไปใช้ --------
 df_filtered = df.copy()
 
-# กรองหมวดหมู่
+# กรองหมวดหมู่ (เทียบแบบสตริงเสมอ เพื่อให้ตรงกับตัวเลือก)
 for c, sel in filters.items():
     if sel and "(ทั้งหมด)" not in sel:
-        df_filtered = df_filtered[df_filtered[c].astype(str).isin(sel)]
+        df_filtered = df_filtered[df_filtered[c].map(_serialize_cell).astype(str).isin(sel)]
 
 # กรองวันที่
 if date_col and start_d is not None and end_d is not None:
